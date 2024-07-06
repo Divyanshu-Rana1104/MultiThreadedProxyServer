@@ -296,4 +296,115 @@ void* thread_fn(void* socketNew)
 		// return NULL;
 	}
 	
+
+   
+   else if(bytes_send_client > 0)
+	{
+		len = strlen(buffer); 
+		//Parsing the request
+		ParsedRequest* request = ParsedRequest_create();
+		
+        //ParsedRequest_parse returns 0 on success and -1 on failure.On success it stores parsed request in
+        // the request
+		if (ParsedRequest_parse(request, buffer, len) < 0) 
+		{
+		   	printf("Parsing failed\n");
+		}
+		else
+		{	
+			bzero(buffer, MAX_BYTES);
+			if(!strcmp(request->method,"GET"))							
+			{
+                
+				if( request->host && request->path && (checkHTTPversion(request->version) == 1) )
+				{
+					bytes_send_client = handle_request(socket, request, tempReq);		// Handle GET request
+					if(bytes_send_client == -1)
+					{	
+						sendErrorMessage(socket, 500);
+					}
+
+				}
+				else
+					sendErrorMessage(socket, 500);			// 500 Internal Error
+
+			}
+            else
+            {
+                printf("This code doesn't support any method other than GET\n");
+            }
+    
+		}
+        //freeing up the request pointer
+		ParsedRequest_destroy(request);
+
+	}
+
+	else if( bytes_send_client < 0)
+	{
+		perror("Error in receiving from client.\n");
+	}
+	else if(bytes_send_client == 0)
+	{
+		printf("Client disconnected!\n");
+	}
+
+	shutdown(socket, SHUT_RDWR);
+	close(socket);
+	free(buffer);
+	sem_post(&seamaphore);	
+	
+	sem_getvalue(&seamaphore,&p);
+	printf("Semaphore post value:%d\n",p);
+	free(tempReq);
+	return NULL;
+}
+
+
+int main(int argc, char * argv[]) {
+
+	int client_socketId, client_len; // client_socketId == to store the client socket id
+	struct sockaddr_in server_addr, client_addr; // Address of client and server to be assigned
+
+    sem_init(&seamaphore,0,MAX_CLIENTS); // Initializing seamaphore and lock
+    pthread_mutex_init(&lock,NULL); // Initializing lock for cache
+    
+
+	if(argc == 2)        //checking whether two arguments are received or not
+	{
+		port_number = atoi(argv[1]);
+	}
+	else
+	{
+		printf("Too few arguments\n");
+		exit(1);
+	}
+
+	printf("Setting Proxy Server Port : %d\n",port_number);
+
+    //creating the proxy socket
+	proxy_socketId = socket(AF_INET, SOCK_STREAM, 0);
+
+	if( proxy_socketId < 0)
+	{
+		perror("Failed to create socket.\n");
+		exit(1);
+	}
+
+	int reuse =1;
+	if (setsockopt(proxy_socketId, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0) 
+        perror("setsockopt(SO_REUSEADDR) failed\n");
+
+	bzero((char*)&server_addr, sizeof(server_addr));  
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(port_number); // Assigning port to the Proxy
+	server_addr.sin_addr.s_addr = INADDR_ANY; // Any available adress assigned
+
+    // Binding the socket
+	if( bind(proxy_socketId, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0 )
+	{
+		perror("Port is not free\n");
+		exit(1);
+	}
+	printf("Binding on port: %d\n",port_number);
 	
