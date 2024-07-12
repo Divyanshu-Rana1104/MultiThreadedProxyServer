@@ -297,7 +297,7 @@ void* thread_fn(void* socketNew)
 	}
 	
 
-   
+
    else if(bytes_send_client > 0)
 	{
 		len = strlen(buffer); 
@@ -408,3 +408,151 @@ int main(int argc, char * argv[]) {
 	}
 	printf("Binding on port: %d\n",port_number);
 	
+    // Proxy socket listening to the requests
+	int listen_status = listen(proxy_socketId, MAX_CLIENTS);
+
+	if(listen_status < 0 )
+	{
+		perror("Error while Listening !\n");
+		exit(1);
+	}
+
+	int i = 0; // Iterator for thread_id (tid) and Accepted Client_Socket for each thread
+	int Connected_socketId[MAX_CLIENTS];   // This array stores socket descriptors of connected clients
+
+    // Infinite Loop for accepting connections
+	while(1)
+	{
+		
+		bzero((char*)&client_addr, sizeof(client_addr));			// Clears struct client_addr
+		client_len = sizeof(client_addr); 
+
+        // Accepting the connections
+		client_socketId = accept(proxy_socketId, (struct sockaddr*)&client_addr,(socklen_t*)&client_len);	// Accepts connection
+		if(client_socketId < 0)
+		{
+			fprintf(stderr, "Error in Accepting connection !\n");
+			exit(1);
+		}
+		else{
+			Connected_socketId[i] = client_socketId; // Storing accepted client into array
+		}
+
+		// Getting IP address and port number of client
+		struct sockaddr_in* client_pt = (struct sockaddr_in*)&client_addr;
+		struct in_addr ip_addr = client_pt->sin_addr;
+		char str[INET_ADDRSTRLEN];										// INET_ADDRSTRLEN: Default ip address size
+		inet_ntop( AF_INET, &ip_addr, str, INET_ADDRSTRLEN );
+		printf("Client is connected with port number: %d and ip address: %s \n",ntohs(client_addr.sin_port), str);
+		//printf("Socket values of index %d in main function is %d\n",i, client_socketId);
+		pthread_create(&tid[i],NULL,thread_fn, (void*)&Connected_socketId[i]); // Creating a thread for each client accepted
+		i++; 
+	}
+	close(proxy_socketId);									// Close socket
+ 	return 0;
+}
+
+cache_element* find(char* url){
+
+// Checks for url in the cache if found returns pointer to the respective cache element or else returns NULL
+    cache_element* site=NULL;
+	//sem_wait(&cache_lock);
+    int temp_lock_val = pthread_mutex_lock(&lock);
+	printf("Remove Cache Lock Acquired %d\n",temp_lock_val); 
+    if(head!=NULL){
+        site = head;
+        while (site!=NULL)
+        {
+            if(!strcmp(site->url,url)){
+				printf("LRU Time Track Before : %ld", site->lru_time_track);
+                printf("\nurl found\n");
+				// Updating the time_track
+				site->lru_time_track = time(NULL);
+				printf("LRU Time Track After : %ld", site->lru_time_track);
+				break;
+            }
+            site=site->next;
+        }       
+    }
+	else {
+    printf("\nurl not found\n");
+	}
+	//sem_post(&cache_lock);
+    temp_lock_val = pthread_mutex_unlock(&lock);
+	printf("Remove Cache Lock Unlocked %d\n",temp_lock_val); 
+    return site;
+}
+
+void remove_cache_element(){
+    // If cache is not empty searches for the node which has the least lru_time_track and deletes it
+    cache_element * p ;  	// Cache_element Pointer (Prev. Pointer)
+	cache_element * q ;		// Cache_element Pointer (Next Pointer)
+	cache_element * temp;	// Cache element to remove
+    //sem_wait(&cache_lock);
+    int temp_lock_val = pthread_mutex_lock(&lock);
+	printf("Remove Cache Lock Acquired %d\n",temp_lock_val); 
+	if( head != NULL) { // Cache != empty
+		for (q = head, p = head, temp =head ; q -> next != NULL; 
+			q = q -> next) { // Iterate through entire cache and search for oldest time track
+			if(( (q -> next) -> lru_time_track) < (temp -> lru_time_track)) {
+				temp = q -> next;
+				p = q;
+			}
+		}
+		if(temp == head) { 
+			head = head -> next; /*Handle the base case*/
+		} else {
+			p->next = temp->next;	
+		}
+		cache_size = cache_size - (temp -> len) - sizeof(cache_element) - 
+		strlen(temp -> url) - 1;     //updating the cache size
+		free(temp->data);     		
+		free(temp->url); // Free the removed element 
+		free(temp);
+	} 
+	//sem_post(&cache_lock);
+    temp_lock_val = pthread_mutex_unlock(&lock);
+	printf("Remove Cache Lock Unlocked %d\n",temp_lock_val); 
+}
+
+int add_cache_element(char* data,int size,char* url){
+    // Adds element to the cache
+	// sem_wait(&cache_lock);
+    int temp_lock_val = pthread_mutex_lock(&lock);
+	printf("Add Cache Lock Acquired %d\n", temp_lock_val);
+    int element_size=size+1+strlen(url)+sizeof(cache_element); // Size of the new element which will be added to the cache
+    if(element_size>MAX_ELEMENT_SIZE){
+		//sem_post(&cache_lock);
+        // If element size is greater than MAX_ELEMENT_SIZE we don't add the element to the cache
+        temp_lock_val = pthread_mutex_unlock(&lock);
+		printf("Add Cache Lock Unlocked %d\n", temp_lock_val);
+		// free(data);
+		// printf("--\n");
+		// free(url);
+        return 0;
+    }
+    else
+    {   while(cache_size+element_size>MAX_SIZE){
+            // We keep removing elements from cache until we get enough space to add the element
+            remove_cache_element();
+        }
+        cache_element* element = (cache_element*) malloc(sizeof(cache_element)); // Allocating memory for the new cache element
+        element->data= (char*)malloc(size+1); // Allocating memory for the response to be stored in the cache element
+		strcpy(element->data,data); 
+        element -> url = (char*)malloc(1+( strlen( url )*sizeof(char)  )); // Allocating memory for the request to be stored in the cache element (as a key)
+		strcpy( element -> url, url );
+		element->lru_time_track=time(NULL);    // Updating the time_track
+        element->next=head; 
+        element->len=size;
+        head=element;
+        cache_size+=element_size;
+        temp_lock_val = pthread_mutex_unlock(&lock);
+		printf("Add Cache Lock Unlocked %d\n", temp_lock_val);
+		//sem_post(&cache_lock);
+		// free(data);
+		// printf("--\n");
+		// free(url);
+        return 1;
+    }
+    return 0;
+}
